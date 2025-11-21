@@ -1,26 +1,34 @@
 const mongoose = require("mongoose");
-
+ 
 const ProfileSettingsSchema = new mongoose.Schema(
   {
     accountId: { type: mongoose.Schema.Types.ObjectId, ref: "Account" },
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     adminId: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
     childAdminId: { type: mongoose.Schema.Types.ObjectId, ref: "ChildAdmin" },
-
+ 
     // Basic Details
-    displayName: { type: String },
     gender: { type: String },
     userName: { type: String },
+    name:{ type: String },
+    lastName:{ type: String },
     bio: { type: String },
     dateOfBirth: { type: Date },
     maritalDate: { type: Date },
     maritalStatus: { type: String },
-    phoneNumber: { type: String },
-
+    phoneNumber: { type: Number },
+    whatsAppNumber:{type:Number},
+ 
     // Location
+    address:{ type: String },
     country: { type: String },
     city: { type: String },
-
+ 
+    //Profile Link
+    shareableLink: { type: String },
+    isPublished: { type: Boolean, default: false },
+ 
+ 
     // Avatar & Cover
     profileAvatar: { type: String },
     profileAvatarId: { type: String },
@@ -30,7 +38,7 @@ const ProfileSettingsSchema = new mongoose.Schema(
     coverPhotoId: { type: String },
     modifiedCoverPhoto: { type: String },
     modifiedCoverPhotoId: { type: String },
-
+ 
     // Social Links
     socialLinks: {
       facebook: { type: String, default: "" },
@@ -41,7 +49,7 @@ const ProfileSettingsSchema = new mongoose.Schema(
       youtube: { type: String, default: "" },
       website: { type: String, default: "" },
     },
-
+ 
     // Theme, Notifications, Privacy
     theme: { type: String, default: "light" },
     notifications: {
@@ -54,16 +62,19 @@ const ProfileSettingsSchema = new mongoose.Schema(
       showCoverPhoto: { type: Boolean, default: true },
       showLocation: { type: Boolean, default: true },
       showPhoneNumber: { type: Boolean, default: true },
+      showWhatsAppNumber: { type: Boolean, default: true },
     },
-
+ 
     language: { type: String, default: "en" },
     timezone: { type: String, default: "Asia/Kolkata" },
     details: { type: mongoose.Schema.Types.Mixed },
-
+ 
     // Visibility — now stored as reference
     visibility: { type: mongoose.Schema.Types.ObjectId, ref: "ProfileVisibility" },
   },
   { timestamps: true }
 );
-
+ 
 module.exports = mongoose.model("ProfileSettings", ProfileSettingsSchema, "ProfileSettings");
+ 
+ 

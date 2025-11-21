@@ -138,7 +138,7 @@ exports.userLogin = async (req, res) => {
       os,
       browser,
     } = req.body;
-
+console.log(deviceId)
     // 1️⃣ Validate inputs
     if (!identifier || !password) {
       return res

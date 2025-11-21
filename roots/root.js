@@ -403,7 +403,7 @@ router.get('/get/profile/detail',auth,getUserProfileDetail);
 
 /* --------------------- User Earnings API --------------------- */
 
-router.get('/get/userearnigs/referrals',getUserEarnings);
+router.get('/get/userearnigs/referrals',auth,getUserEarnings);
 
 /*-----------------------User Location API ---------------------*/
 router.post("/save/user/location",auth,saveUserLocation);

@@ -8,7 +8,7 @@ const Device =require("../models/userModels/userSession-Device/deviceModel"); //
 exports.refreshAccessToken = async (req, res) => {
   try {
     const { refreshToken, deviceId, os, browser, deviceType } = req.body;
-
+console.log({ refreshToken, deviceId, os, browser, deviceType } )
     if (!refreshToken) {
       return res.status(400).json({ error: "Refresh token required" });
     }
@@ -46,7 +46,7 @@ exports.refreshAccessToken = async (req, res) => {
           referralCode: user.referralCode,
         },
         process.env.JWT_SECRET,
-        { expiresIn: "1h" }
+       { expiresIn: "1h" } // TEST ONLY
       );
 
       // 4️⃣ Update Session info
@@ -118,31 +118,46 @@ exports.refreshAccessToken = async (req, res) => {
 exports.heartbeat = async (req, res) => {
   try {
     const { sessionId } = req.body;
-    if (!sessionId)
+
+    if (!sessionId) {
       return res.status(400).json({ error: "Session ID required" });
+    }
 
-    const session = await Session.findById(sessionId);
-    if (!session)
-      return res.status(404).json({ error: "Session not found" });
+    // ✅ Update session "lastSeenAt" fast + async (no blocking)
+    Session.updateOne(
+      { _id: sessionId },
+      { $set: { lastSeenAt: new Date(), isOnline: true } }
+    ).exec(); // 🚀 No await → no timeouts
 
-    // 🕒 Update session + mark as online
-    session.lastSeenAt = new Date();
-    session.isOnline = true;
-    await session.save();
+    // ✅ Update user online status async
+    Session.findById(sessionId)
+      .select("userId")
+      .lean()
+      .then((session) => {
+        if (!session) return;
 
-    // 🟢 Update user online status
-    await User.findByIdAndUpdate(session.userId, { isOnline: true });
+        // Update user status async
+        User.updateOne(
+          { _id: session.userId },
+          { $set: { isOnline: true } }
+        ).exec();
 
-    // 📡 Emit WebSocket event to all connected clients
-    const io = getIO();
-    if (io) io.emit("userOnline", { userId: session.userId });
+        // ✅ Emit presence change ONLY if user was previously offline
+        const io = getIO();
+        if (io) {
+          io.emit("userOnline", { userId: session.userId });
+        }
+      });
 
-    res.json({ message: "Heartbeat recorded" });
+    // ✅ Return instantly → no waiting → no timeout
+    return res.status(200).json({ message: "Heartbeat OK" });
+
   } catch (error) {
-    console.error("Heartbeat error:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Heartbeat error:", error.message);
+    return res.status(500).json({ error: "Server Error" });
   }
 };
+
 
 
 

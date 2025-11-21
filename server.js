@@ -39,7 +39,7 @@ app.use("/web/job",jobRoot);
 app.use("/api", root);
 app.use("/web/api", webRoot);
 
- startCrons()
+//  startCrons()
 
 // MongoDB connection and server start
 mongoose.connect(process.env.MONGODB_URI)

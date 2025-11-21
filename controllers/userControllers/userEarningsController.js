@@ -3,6 +3,7 @@ const UserEarning = require("../../models/userModels/referralEarnings");
 const ProfileSettings = require("../../models/profileSettingModel");
 const Withdrawal = require("../../models/userModels/withdrawal");
 const UserSubscription=require("../../models/subcriptionModels/userSubscreptionModel");
+const SubscriptionPlan=require("../../models/subcriptionModels/subscriptionPlanModel")
 
 
 
@@ -13,12 +14,14 @@ exports.getUserEarnings = async (req, res) => {
   try {
     const userId = req.Id;
 
+    console.log(userId)
+
     if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
       return res.status(400).json({ message: "Valid userId is required" });
     }
 
     // ✅ Check if the user has an active "basic" subscription
-    const basicPlan = await SubscriptionPlan.findOne({ name: "basic" }).lean();
+    const basicPlan = await SubscriptionPlan.findOne({ planType: "basic" }).lean();
     if (!basicPlan) return res.status(500).json({ message: "Basic plan not found" });
 
     const activeSubscription = await UserSubscription.findOne({

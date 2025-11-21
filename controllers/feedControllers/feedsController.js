@@ -1,26 +1,34 @@
 const Feed = require('../../models/feedModel');
 const User = require('../../models/userModels/userModel');
 const { feedTimeCalculator } = require('../../middlewares/feedTimeCalculator');
-const UserFeedActions =require('../../models/userFeedInterSectionModel.js');
-const Account =require("../../models/accountSchemaModel.js");
+const UserFeedActions = require('../../models/userFeedInterSectionModel.js');
+const Account = require("../../models/accountSchemaModel.js");
 const mongoose = require("mongoose");
 const UserComment = require("../../models/userCommentModel.js");
 const UserView = require("../../models/userModels/userViewFeedsModel.js");
-const UserLanguage=require('../../models/userModels/userLanguageModel.js');
-const  UserCategory=require('../../models/userModels/userCategotyModel.js');
-const ProfileSettings=require('../../models/profileSettingModel');
+const UserLanguage = require('../../models/userModels/userLanguageModel.js');
+const UserCategory = require('../../models/userModels/userCategotyModel.js');
+const ProfileSettings = require('../../models/profileSettingModel');
 const { applyFrame } = require("../../middlewares/helper/AddFrame/addFrame.js");
-const {extractThemeColor}=require("../../middlewares/helper/extractThemeColor.js");
+const { extractThemeColor } = require("../../middlewares/helper/extractThemeColor.js");
 const ImageStats = require("../../models/userModels/MediaSchema/imageViewModel.js");
 const VideoStats = require("../../models/userModels/MediaSchema/videoViewStatusModel");
 
 exports.getAllFeedsByUserId = async (req, res) => {
   try {
     const rawUserId = req.Id || req.body.userId;
+    console.log(rawUserId);
     if (!rawUserId)
       return res.status(404).json({ message: "User ID Required" });
 
     const userId = new mongoose.Types.ObjectId(rawUserId);
+
+    // 📄 Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    console.log(`📄 Fetching page ${page}, limit ${limit}, skip ${skip}`);
 
     // 0️⃣ Get hidden posts for this user
     const user = await User.findById(userId).select("hiddenPostIds").lean();
@@ -43,6 +51,8 @@ exports.getAllFeedsByUserId = async (req, res) => {
         },
       },
       { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
 
       // 🔹 Lookup Admins
       {
@@ -273,7 +283,7 @@ exports.getAllFeedsByUserId = async (req, res) => {
     // ✅ Enrich with additional info (theme color + avatar)
     const enrichedFeeds = await Promise.all(
       feeds.map(async (feed) => {
-        const profileSetting = await ProfileSettings.findOne({userId });
+        const profileSetting = await ProfileSettings.findOne({ userId });
         const avatarToUse = profileSetting?.modifyAvatar;
         //  const framedAvatar = await applyFrame(avatarToUse);
 
@@ -300,9 +310,33 @@ exports.getAllFeedsByUserId = async (req, res) => {
       })
     );
 
+    // 📊 Get total count for pagination metadata
+    const totalFeeds = await Feed.countDocuments({
+      _id: { $nin: hiddenPostIds },
+      $or: [
+        { isScheduled: { $ne: true } },
+        {
+          $and: [
+            { isScheduled: true },
+            { scheduleDate: { $lte: new Date() } },
+          ],
+        },
+      ],
+    });
+
+    const totalPages = Math.ceil(totalFeeds / limit);
+    const hasMore = page < totalPages;
+
     res.status(200).json({
       message: "Feeds retrieved successfully",
       feeds: enrichedFeeds,
+      pagination: {
+        currentPage: page,
+        limit,
+        totalFeeds,
+        totalPages,
+        hasMore,
+      },
     });
   } catch (err) {
     console.error("Error in getAllFeedsByUserId:", err);
@@ -452,7 +486,7 @@ exports.getFeedsByAccountId = async (req, res) => {
         commentsCount: commentsCount[fid] || 0,
         isLiked: likedFeedIds.includes(fid),
         isSaved: savedFeedIds.includes(fid),
-        isDisliked: dislikedFeedIds.includes(fid), 
+        isDisliked: dislikedFeedIds.includes(fid),
         userName: profile?.userName || "Unknown",
         profileAvatar: profile?.profileAvatar,
       };
@@ -475,27 +509,34 @@ exports.getFeedsByAccountId = async (req, res) => {
 exports.getUserHidePost = async (req, res) => {
   try {
     const userId = req.Id || req.body.userId;
+ 
     if (!userId) {
       return res.status(400).json({ message: "userId is required" });
     }
-
-    //  Find user
-    const user = await User.findById(userId, "hiddenPostIds").lean();
+ 
+    // 1️⃣ Fetch only the hiddenPostIds (super lightweight)
+    const user = await User.findById(userId)
+      .select("hiddenPostIds")
+      .lean();
+ 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-
-    // 2️ If no hidden posts
-    if (!user.hiddenPostIds || user.hiddenPostIds.length === 0) {
+ 
+    const hiddenIds = user.hiddenPostIds || [];
+ 
+    // 2️⃣ If empty → return early (faster)
+    if (hiddenIds.length === 0) {
       return res.status(200).json({
         message: "No hidden posts found",
+        count: 0,
         data: [],
       });
     }
-
-    // 3️ Fetch hidden posts
+ 
+    // 3️⃣ Fetch hidden posts (optimized with projection + lean)
     const hiddenPosts = await Feed.find(
-      { _id: { $in: user.hiddenPostIds } },
+      { _id: { $in: hiddenIds } },
       {
         _id: 1,
         title: 1,
@@ -504,21 +545,25 @@ exports.getUserHidePost = async (req, res) => {
         createdAt: 1,
         createdByAccount: 1,
       }
-    ).lean();
-
-    res.status(200).json({
+    )
+      .populate("createdByAccount", "_id userName profileImage")
+      .lean();
+ 
+    return res.status(200).json({
       message: "Hidden posts fetched successfully",
       count: hiddenPosts.length,
       data: hiddenPosts,
     });
+ 
   } catch (err) {
     console.error("Error fetching hidden posts:", err);
-    res.status(500).json({
+    return res.status(500).json({
       message: "Error fetching hidden posts",
       error: err.message,
     });
   }
 };
+ 
 
 
 
@@ -528,7 +573,7 @@ exports.getUserHidePost = async (req, res) => {
 exports.getUserInfoAssociatedFeed = async (req, res) => {
   try {
     let feedId = req.params.feedId || req.body.feedId;
-    const userId = req.Id || req.body.userId; 
+    const userId = req.Id || req.body.userId;
 
     if (!feedId) {
       return res.status(400).json({ message: "feedId is required" });

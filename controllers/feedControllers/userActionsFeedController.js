@@ -1,18 +1,18 @@
 const UserFeedActions = require("../../models/userFeedInterSectionModel.js");
 const Feeds = require("../../models/feedModel.js");
 const { getActiveUserAccount } = require('../../middlewares/creatorAccountactiveStatus.js');
-const UserComment =require("../../models/userCommentModel.js");
-const UserReplyComment=require('../../models/userRepliesModel')
+const UserComment = require("../../models/userCommentModel.js");
+const UserReplyComment = require('../../models/userRepliesModel')
 const CommentLike = require("../../models/commentsLikeModel.js");
-const path=require('path')
-const User=require('../../models/userModels/userModel');
+const path = require('path')
+const User = require('../../models/userModels/userModel');
 const mongoose = require("mongoose");
-const ProfileSettings=require('../../models/profileSettingModel');
+const ProfileSettings = require('../../models/profileSettingModel');
 const { feedTimeCalculator } = require("../../middlewares/feedTimeCalculator");
-const UserCategory=require('../../models/userModels/userCategotyModel.js');
-const Category=require('../../models/categorySchema.js');
-const HiddenPost=require("../../models/userModels/hiddenPostSchema.js");
-const Feed =require("../../models/feedModel.js");
+const UserCategory = require('../../models/userModels/userCategotyModel.js');
+const Category = require('../../models/categorySchema.js');
+const HiddenPost = require("../../models/userModels/hiddenPostSchema.js");
+const Feed = require("../../models/feedModel.js");
 const Notification = require("../../models/notificationModel.js");
 const { createAndSendNotification } = require("../../middlewares/helper/socketNotification.js");
 
@@ -32,7 +32,7 @@ exports.likeFeed = async (req, res) => {
       "likedFeeds.feedId": feedId,
     });
 
-    let updatedDoc, message, isLike;
+    let updatedDoc, message, isLiked;
 
     if (existingAction) {
       updatedDoc = await UserFeedActions.findOneAndUpdate(
@@ -41,7 +41,7 @@ exports.likeFeed = async (req, res) => {
         { new: true }
       );
       message = "Unliked successfully";
-      isLike = false;
+      isLiked = false;
     } else {
       updatedDoc = await UserFeedActions.findOneAndUpdate(
         { userId },
@@ -49,38 +49,48 @@ exports.likeFeed = async (req, res) => {
         { upsert: true, new: true }
       );
       message = "Liked successfully";
-      isLike = true;
+      isLiked = true;
     }
 
-   // 🔹 Create notification only if liked
-if (isLike) {
-  const feed = await Feeds.findById(feedId)
-    .select("createdByAccount contentUrl roleRef")
-    .lean();
+    // 🔹 Create notification only if liked
+    if (isLiked) {
+      const feed = await Feeds.findById(feedId)
+        .select("createdByAccount contentUrl roleRef")
+        .lean();
 
-  if (feed && feed.createdByAccount.toString() !== userId.toString()) {
-    await createAndSendNotification({
-      senderId: userId,
-      receiverId: feed.createdByAccount,
-      type: "LIKE_POST",
-      title: "New Like ❤️",
-      message: "Someone liked your post.",
-      entityId: feed._id,
-      entityType: "Feed",
-      image: feed.contentUrl || "",
-      roleRef: feed.roleRef || "User", // optional, for context
+      if (feed && feed.createdByAccount.toString() !== userId.toString()) {
+        await createAndSendNotification({
+          senderId: userId,
+          receiverId: feed.createdByAccount,
+          type: "LIKE_POST",
+          title: "New Like ❤️",
+          message: "Someone liked your post.",
+          entityId: feed._id,
+          entityType: "Feed",
+          image: feed.contentUrl || "",
+          roleRef: feed.roleRef || "User", // optional, for context
+        });
+      }
+    }
+
+    // ✅ Calculate actual like count from database
+    const likeCount = await UserFeedActions.countDocuments({
+      "likedFeeds.feedId": feedId
     });
-  }
-}
-
 
     res.status(200).json({
+      success: true,
       message,
+      isLiked,
+      likeCount,
       likedFeeds: updatedDoc.likedFeeds,
     });
   } catch (err) {
     console.error("Error in likeFeed:", err);
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({
+      success: false,
+      message: "Internal server error"
+    });
   }
 };
 
@@ -97,12 +107,12 @@ exports.toggleDislikeFeed = async (req, res) => {
       return res.status(400).json({ success: false, message: "Feed ID is required" });
     }
 
-    if (!userId && !accountId) {
-      return res.status(400).json({ success: false, message: "User or Account ID is required" });
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is required" });
     }
 
     //  Identify the query based on user type
-    const query = userId ? { userId } : { accountId };
+    const query = { userId };
 
     //  Find or create user action document
     let userActions = await UserFeedActions.findOne(query);
@@ -119,17 +129,14 @@ exports.toggleDislikeFeed = async (req, res) => {
       (item) => item.feedId.toString() === feedId
     );
 
+    let newIsDisliked;
+
     if (isDisliked) {
       //  Pull feedId (remove dislike)
       await UserFeedActions.updateOne(query, {
         $pull: { disLikeFeeds: { feedId: new mongoose.Types.ObjectId(feedId) } },
       });
-
-      return res.status(200).json({
-        success: true,
-        message: "Dislike removed successfully",
-        action: "removed",
-      });
+      newIsDisliked = false;
     } else {
       //  Push feedId (add dislike)
       await UserFeedActions.updateOne(
@@ -144,13 +151,21 @@ exports.toggleDislikeFeed = async (req, res) => {
         },
         { upsert: true }
       );
-
-      return res.status(200).json({
-        success: true,
-        message: "Feed disliked successfully",
-        action: "added",
-      });
+      newIsDisliked = true;
     }
+
+    // ✅ Calculate actual dislike count from database
+    const dislikeCount = await UserFeedActions.countDocuments({
+      "disLikeFeeds.feedId": new mongoose.Types.ObjectId(feedId)
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: newIsDisliked ? "Feed disliked successfully" : "Dislike removed successfully",
+      isDisliked: newIsDisliked,
+      dislikeCount,
+      action: newIsDisliked ? "added" : "removed",
+    });
   } catch (error) {
     console.error("❌ Error toggling dislike:", error);
     return res.status(500).json({
@@ -246,15 +261,15 @@ exports.downloadFeed = async (req, res) => {
     if (!feed) return res.status(404).json({ message: "Feed not found" });
 
     // ✅ Generate proper absolute download link
-   
+
     const downloadLink =
       feed.downloadUrl
-        ?feed.downloadUrl
+        ? feed.downloadUrl
         : feed.fileUrl
-        ? feed.fileUrl
-        : feed.contentUrl
-        ? feed.contentUrl
-        : null;
+          ? feed.fileUrl
+          : feed.contentUrl
+            ? feed.contentUrl
+            : null;
 
     if (!downloadLink) {
       return res.status(400).json({ message: "No downloadable link available" });
@@ -332,24 +347,24 @@ exports.postComment = async (req, res) => {
     const userProfile = await ProfileSettings.findOne({ userId })
       .select("userName profileAvatar")
       .lean();
-// 🔹 Notify feed owner
-const feed = await Feeds.findById(feedId)
-  .select("createdByAccount contentUrl roleRef")
-  .lean();
+    // 🔹 Notify feed owner
+    const feed = await Feeds.findById(feedId)
+      .select("createdByAccount contentUrl roleRef")
+      .lean();
 
-if (feed && feed.createdByAccount.toString() !== userId.toString()) {
-  await createAndSendNotification({
-    senderId: userId,
-    receiverId: feed.createdByAccount,
-    type: "COMMENT",
-    title: "New Comment 💬",
-    message: `${commentText.slice(0, 50)}...`,
-    entityId: feed._id,
-    entityType: "Feed",
-    image: feed.contentUrl || "",
-    roleRef: feed.roleRef || "User", // optional
-  });
-}
+    if (feed && feed.createdByAccount.toString() !== userId.toString()) {
+      await createAndSendNotification({
+        senderId: userId,
+        receiverId: feed.createdByAccount,
+        type: "COMMENT",
+        title: "New Comment 💬",
+        message: `${commentText.slice(0, 50)}...`,
+        entityId: feed._id,
+        entityType: "Feed",
+        image: feed.contentUrl || "",
+        roleRef: feed.roleRef || "User", // optional
+      });
+    }
 
 
     res.status(201).json({
@@ -553,7 +568,7 @@ exports.getUserSavedFeeds = async (req, res) => {
     const likesAggregation = await UserFeedActions.aggregate([
       { $unwind: "$likedFeeds" },
       { $match: { "likedFeeds.feedId": { $in: savedFeedIds } } },
-      { 
+      {
         $group: {
           _id: "$likedFeeds.feedId",
           likeCount: { $sum: 1 }
@@ -725,44 +740,86 @@ exports.getUserLikedFeeds = async (req, res) => {
 
 
 exports.userHideFeed = async (req, res) => {
+
   try {
+
     const userId = req.Id || req.body.userId;
+
     const postId = req.body.feedId;
 
     if (!userId || !postId) {
+
       return res.status(400).json({ message: "User ID and Post ID are required" });
+
     }
 
-    // ✅ Check if post and user exist
-    const [user, post] = await Promise.all([
-      User.findById(userId),
-      Feed.findById(postId)
-    ]);
+    // 1️⃣ Check if hidden already (very fast when index exists)
 
-    if (!user) return res.status(404).json({ message: "User not found" });
-    if (!post) return res.status(404).json({ message: "Feed not found" });
+    const already = await HiddenPost.findOne({ userId, postId }).lean();
 
-    // ✅ Check if already hidden
-    const alreadyHidden = await HiddenPost.findOne({ userId, postId });
-    if (alreadyHidden) {
-      return res.status(400).json({ message: "Post already hidden" });
+    if (already) {
+
+      return res.status(200).json({ message: "Post already hidden" });
+
     }
 
-    // ✅ Create new hidden post entry
+    // 2️⃣ Confirm user exists (light query)
+
+    const userExists = await User.exists({ _id: userId });
+
+    if (!userExists) {
+
+      return res.status(404).json({ message: "User not found" });
+
+    }
+
+    // 3️⃣ Confirm feed exists (light query)
+
+    const feedExists = await Feed.exists({ _id: postId });
+
+    if (!feedExists) {
+
+      return res.status(404).json({ message: "Feed not found" });
+
+    }
+
+    // 4️⃣ Hide post
+
     await HiddenPost.create({ userId, postId });
 
-    res.status(200).json({ message: "Post hidden successfully" });
+    return res.status(200).json({ message: "Post hidden successfully" });
+
   } catch (err) {
+
     console.error("Error hiding post:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
+
+    // Handle duplicate index error safely
+
+    if (err.code === 11000) {
+
+      return res.status(200).json({ message: "Post already hidden" });
+
+    }
+
+    return res.status(500).json({
+
+      message: "Server error",
+
+      error: err.message,
+
+    });
+
   }
+
 };
+
+
 
 
 exports.getUserCategory = async (req, res) => {
   try {
-    const userId= req.Id || req.body.userId  ;
-    
+    const userId = req.Id || req.body.userId;
+
 
     if (!userId) {
       return res.status(400).json({ message: "User ID not found in token" });

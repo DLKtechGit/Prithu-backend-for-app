@@ -15,7 +15,7 @@ const DeviceSchema = new mongoose.Schema(
     // 🔹 Type of device (web, mobile, tablet)
     deviceType: {
       type: String,
-      enum: ["web", "mobile", "tablet", "desktop"],
+      enum: ["web", "phone", "tablet", "desktop"],
       default: "web",
     },
 
