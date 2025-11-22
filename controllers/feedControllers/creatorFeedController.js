@@ -1,15 +1,22 @@
 const Feed = require('../../models/feedModel');
 const { getVideoDurationInSeconds } = require('get-video-duration');
 const fs = require('fs');
-const path =require ('path');
-const Account=require("../../models/accountSchemaModel");
-const {feedTimeCalculator}=require("../../middlewares/feedTimeCalculator");
-const {getActiveCreatorAccount}=require("../../middlewares/creatorAccountactiveStatus");
-const Categories=require('../../models/categorySchema');
-const mongoose=require("mongoose");
+const path = require('path');
+const Account = require("../../models/accountSchemaModel");
+const { feedTimeCalculator } = require("../../middlewares/feedTimeCalculator");
+const { getActiveCreatorAccount } = require("../../middlewares/creatorAccountactiveStatus");
+const Categories = require('../../models/categorySchema');
+const mongoose = require("mongoose");
 const { getLanguageCode, getLanguageName } = require("../../middlewares/helper/languageHelper");
-const  feedQueue=require("../../queue/feedPostQueue");
+const feedQueue = require("../../queue/feedPostQueue");
 
+// Helper function to extract hashtags from text
+const extractHashtags = (text) => {
+  if (!text) return [];
+  const hashtagRegex = /#[\w]+/g;
+  const matches = text.match(hashtagRegex);
+  return matches ? matches.map(tag => tag.slice(1)) : []; // Remove the '#' symbol
+};
 
 
 exports.creatorFeedUpload = async (req, res) => {
@@ -17,30 +24,28 @@ exports.creatorFeedUpload = async (req, res) => {
     const userId = req.Id || req.body.userId;
     const userRole = req.role;
 
+    console.log(req.cloudinaryFile)
+
     if (!userId) {
       return res.status(400).json({ message: "User ID is required" });
     }
 
-    // ✅ Ensure file uploaded to Cloudinary
     if (!req.cloudinaryFile) {
       return res.status(400).json({ message: "No file uploaded to Cloudinary" });
     }
 
     const { language, categoryId, type, scheduleDate, dec } = req.body;
+    console.log('Language (optional):', language);
 
-    if (!language || !categoryId || !type) {
+    if (!categoryId || !type) {
       return res
         .status(400)
-        .json({ message: "Language, categoryId, and type are required" });
+        .json({ message: "categoryId and type are required" });
     }
 
-    // ✅ Normalize language
-    const normalizedLang = getLanguageCode(language);
-    if (!normalizedLang) {
-      return res.status(400).json({ message: "Invalid language" });
-    }
+    // ✅ Extract hashtags
+    const hashtags = extractHashtags(dec);
 
-    // ✅ Validate category
     const categoryDoc = await Categories.findById(categoryId).lean();
     if (!categoryDoc) {
       return res.status(400).json({ message: "Invalid categoryId" });
@@ -48,9 +53,8 @@ exports.creatorFeedUpload = async (req, res) => {
 
     const { url, public_id } = req.cloudinaryFile;
     const fileHash = req.fileHash || null;
-    const videoDuration = req.videoDuration || null; // duration from middleware if video
+    const videoDuration = req.videoDuration || null;
 
-    // ✅ Check duplicate by fileHash or URL
     if (fileHash) {
       const existingByHash = await Feed.findOne({ fileHash }).lean();
       if (existingByHash) {
@@ -69,10 +73,10 @@ exports.creatorFeedUpload = async (req, res) => {
       });
     }
 
-    // ✅ Create new feed
+    // ✅ Create new feed with hashtags included
     const newFeed = new Feed({
       type,
-      language: normalizedLang,
+      language: language || null, // Optional: defaults to null if not provided
       category: categoryId,
       createdByAccount: userId,
       roleRef: userRole,
@@ -82,15 +86,35 @@ exports.creatorFeedUpload = async (req, res) => {
       duration: videoDuration,
       scheduledAt: scheduleDate ? new Date(scheduleDate) : null,
       isPosted: scheduleDate ? false : true,
-      dec: dec || "", // 🆕 description field
+      dec: dec || "",
+      hashtags: hashtags,
     });
 
     await newFeed.save();
 
-    // ✅ Update category feed list
+    // Update category feed list
     await Categories.findByIdAndUpdate(categoryId, {
       $addToSet: { feedIds: newFeed._id },
     });
+
+    // ---------------------------------------
+    // 🚀 REDIS INCREMENT HASHTAGS (SCALABLE)
+    // ---------------------------------------
+    // TODO: Uncomment when redisClient is properly configured
+    // if (hashtags.length > 0) {
+    //   hashtags.forEach(tag => {
+    //     redisClient.hincrby("hashtag_counts", tag, 1);  
+    //   });
+    // }
+
+    // TODO: Uncomment when logUserActivity is properly configured
+    // await logUserActivity({
+    //   userId,
+    //   actionType: "CREATE_POST",
+    //   targetId: newFeed._id,
+    //   targetModel: "Feed",
+    //   metadata: { platform: "web" },
+    // });
 
     return res.status(201).json({
       message: scheduleDate
@@ -98,9 +122,9 @@ exports.creatorFeedUpload = async (req, res) => {
         : "Feed uploaded successfully",
       feed: {
         ...newFeed.toObject(),
-        languageName: getLanguageName(normalizedLang),
       },
     });
+
   } catch (err) {
     console.error("Error creating feed:", err);
 
@@ -116,43 +140,6 @@ exports.creatorFeedUpload = async (req, res) => {
   }
 };
 
- 
- 
- 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 exports.creatorFeedScheduleUpload = async (req, res) => {
   try {
@@ -165,7 +152,7 @@ exports.creatorFeedScheduleUpload = async (req, res) => {
 
     const newFeed = new Feed({
       type,
-      language,
+      language: language || null,
       category: categoryId,
       dec,
       contentUrl: fileUrl,
@@ -219,12 +206,3 @@ exports.creatorFeedScheduleUpload = async (req, res) => {
     res.status(500).json({ message: "Upload failed", error: err.message });
   }
 };
-
-
-
-
-
-
-
-
-

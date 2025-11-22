@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 const feedSchema = new mongoose.Schema(
   {
     type: { type: String, required: true }, // image/video
-    language: { type: String, required: true },
+    language: { type: String, required: false, default: null },
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Categories",
@@ -27,7 +27,7 @@ const feedSchema = new mongoose.Schema(
       default: "User",
     },
 
-  
+
     isScheduled: { type: Boolean, default: false },
     scheduleDate: { type: Date, default: null },
     status: {

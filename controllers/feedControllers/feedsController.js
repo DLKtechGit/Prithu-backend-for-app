@@ -743,49 +743,56 @@ exports.getUserInfoAssociatedFeed = async (req, res) => {
 
 exports.getTrendingFeeds = async (req, res) => {
   try {
-    // 1️⃣ Fetch all feeds
-    const feeds = await Feed.find({})
+    // 🔥 1️⃣ Today's date range
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+ 
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+ 
+    // 🔥 2️⃣ Fetch ONLY today's feeds
+    const feeds = await Feed.find({
+      createdAt: { $gte: todayStart, $lte: todayEnd }
+    })
       .populate("createdByAccount", "_id")
       .lean();
-
+ 
     if (!feeds.length) {
-      return res.status(404).json({ message: "No feeds available" });
+      return res.status(404).json({ message: "No feeds available for today" });
     }
-
-    // 2️⃣ Compute engagement metrics per feed
+ 
+    // ⚡ 3️⃣ Compute engagement metrics per feed
     const feedScores = await Promise.all(
       feeds.map(async (feed) => {
         const feedId = feed._id;
         const userId = feed.createdByAccount?._id;
         const roleRef = feed.roleRef;
-
-        // 🧩 Profile Info
+ 
+        // Profile Query
         let queryField;
         if (roleRef === "Admin") queryField = { adminId: userId };
         else if (roleRef === "Child_Admin") queryField = { childAdminId: userId };
         else queryField = { userId: userId };
-
+ 
         const profile = await ProfileSettings.findOne(queryField, {
           userName: 1,
           profileAvatar: 1,
         }).lean();
-
+ 
         let totalLikes = 0;
         let totalShares = 0;
         let totalViews = 0;
         let totalDownloads = 0;
         let score = 0;
-
+ 
         const feedAgeHours =
           (Date.now() - new Date(feed.createdAt)) / (1000 * 60 * 60);
-
-        // ⚡ Handle Admin/Child Admin special privilege
+ 
+        // Admin / Child Admin Privilege (unchanged)
         if (roleRef === "Admin" || roleRef === "Child_Admin") {
           if (feedAgeHours <= 48) {
-            // Within 2 days privilege → Always top rank later
-            score = 999999; // artificially high for rank 1
+            score = 999999;
           } else {
-            // After 2 days, treat as normal user feed
             const userActions = await UserFeedActions.aggregate([
               { $project: { likedFeeds: 1, sharedFeeds: 1 } },
               {
@@ -816,10 +823,10 @@ exports.getTrendingFeeds = async (req, res) => {
                 },
               },
             ]);
-
+ 
             totalLikes = userActions[0]?.totalLikes || 0;
             totalShares = userActions[0]?.totalShares || 0;
-
+ 
             if (feed.type === "image") {
               const imgStats = await ImageStats.findOne({ imageId: feedId });
               totalViews = imgStats?.totalViews || 0;
@@ -829,10 +836,9 @@ exports.getTrendingFeeds = async (req, res) => {
               totalViews = vidStats?.totalViews || 0;
               totalDownloads = vidStats?.totalDownloads || 0;
             }
-
-            // 🕒 Decay (apply only after 24 hours)
+ 
             const decayFactor = feedAgeHours <= 24 ? 1 : Math.exp(-feedAgeHours / 48);
-
+ 
             score =
               (totalLikes * 3 +
                 totalShares * 5 +
@@ -841,7 +847,7 @@ exports.getTrendingFeeds = async (req, res) => {
               decayFactor;
           }
         } else {
-          // 🧮 Regular user feed scoring
+          // Regular User Feed Scoring
           const userActions = await UserFeedActions.aggregate([
             { $project: { likedFeeds: 1, sharedFeeds: 1 } },
             {
@@ -872,10 +878,10 @@ exports.getTrendingFeeds = async (req, res) => {
               },
             },
           ]);
-
+ 
           totalLikes = userActions[0]?.totalLikes || 0;
           totalShares = userActions[0]?.totalShares || 0;
-
+ 
           if (feed.type === "image") {
             const imgStats = await ImageStats.findOne({ imageId: feedId });
             totalViews = imgStats?.totalViews || 0;
@@ -885,10 +891,9 @@ exports.getTrendingFeeds = async (req, res) => {
             totalViews = vidStats?.totalViews || 0;
             totalDownloads = vidStats?.totalDownloads || 0;
           }
-
-          // 🕒 Decay only after 24 hrs
+ 
           const decayFactor = feedAgeHours <= 24 ? 1 : Math.exp(-feedAgeHours / 48);
-
+ 
           score =
             (totalLikes * 3 +
               totalShares * 5 +
@@ -896,7 +901,7 @@ exports.getTrendingFeeds = async (req, res) => {
               totalDownloads * 4) *
             decayFactor;
         }
-
+ 
         return {
           ...feed,
           totalLikes,
@@ -914,15 +919,13 @@ exports.getTrendingFeeds = async (req, res) => {
         };
       })
     );
-
-    // 3️⃣ Sort all feeds by score
+ 
+    // Sort feeds by score
     const sortedFeeds = feedScores.sort((a, b) => b.score - a.score);
-
-    // 4️⃣ Assign trending score (normalize)
     const maxScore = sortedFeeds.length
       ? Math.max(...sortedFeeds.map((f) => f.score))
       : 0;
-
+ 
     const normalizedFeeds = sortedFeeds.map((f, index) => ({
       ...f,
       trendingScore: maxScore
@@ -930,15 +933,14 @@ exports.getTrendingFeeds = async (req, res) => {
         : 0,
       rank: index + 1,
     }));
-
-    // 5️⃣ Remove raw score field
+ 
     const cleanedFeeds = normalizedFeeds.map((f) => {
       const { score, ...rest } = f;
       return rest;
     });
-
+ 
     return res.status(200).json({
-      message: "Feeds ranked with decay, trending score, and admin privilege logic",
+      message: "Today's Trending Feeds",
       count: cleanedFeeds.length,
       data: cleanedFeeds,
     });
@@ -950,6 +952,7 @@ exports.getTrendingFeeds = async (req, res) => {
     });
   }
 };
+ 
 
 
 
