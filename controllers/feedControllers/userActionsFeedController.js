@@ -740,78 +740,52 @@ exports.getUserLikedFeeds = async (req, res) => {
 
 
 exports.userHideFeed = async (req, res) => {
-
   try {
-
     const userId = req.Id || req.body.userId;
-
     const postId = req.body.feedId;
-
+ 
     if (!userId || !postId) {
-
       return res.status(400).json({ message: "User ID and Post ID are required" });
-
     }
-
+ 
     // 1️⃣ Check if hidden already (very fast when index exists)
-
     const already = await HiddenPost.findOne({ userId, postId }).lean();
-
     if (already) {
-
       return res.status(200).json({ message: "Post already hidden" });
-
     }
-
+ 
     // 2️⃣ Confirm user exists (light query)
-
     const userExists = await User.exists({ _id: userId });
-
     if (!userExists) {
-
       return res.status(404).json({ message: "User not found" });
-
     }
-
+ 
     // 3️⃣ Confirm feed exists (light query)
-
     const feedExists = await Feed.exists({ _id: postId });
-
     if (!feedExists) {
-
       return res.status(404).json({ message: "Feed not found" });
-
     }
-
+ 
     // 4️⃣ Hide post
-
     await HiddenPost.create({ userId, postId });
-
+ 
     return res.status(200).json({ message: "Post hidden successfully" });
-
+ 
   } catch (err) {
-
     console.error("Error hiding post:", err);
-
+ 
     // Handle duplicate index error safely
-
     if (err.code === 11000) {
-
       return res.status(200).json({ message: "Post already hidden" });
-
     }
-
+ 
     return res.status(500).json({
-
       message: "Server error",
-
       error: err.message,
-
     });
-
   }
-
 };
+ 
 
 
 

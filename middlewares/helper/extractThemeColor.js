@@ -7,7 +7,7 @@ function rgbToHex([r, g, b]) {
 }
 
 function getTextColor([r, g, b]) {
-  const brightness = Math.sqrt(0.299*r*r + 0.587*g*g + 0.114*b*b);
+  const brightness = Math.sqrt(0.299 * r * r + 0.587 * g * g + 0.114 * b * b);
   return brightness > 150 ? "#000000" : "#FFFFFF";
 }
 
@@ -25,36 +25,58 @@ function ensureColorDistance(primary, secondary, minDistance = 50) {
   return secondary;
 }
 
+// --- Default Color Scheme ---
+const DEFAULT_THEME = {
+  primary: "#4A90E2",      // Professional blue
+  secondary: "#7B68EE",    // Medium slate blue
+  accent: "#50C878",       // Emerald green
+  text: "#FFFFFF",         // White text
+  gradient: "linear-gradient(135deg, #4A90E2, #7B68EE, #50C878)",
+};
+
 // --- Main Function ---
 async function extractThemeColor(fileUrl, type = "image") {
   try {
     // --- Prepare URLs ---
     let urls = [fileUrl];
 
-    if(type === "video") {
+    if (type === "video") {
       const base = fileUrl.replace(/\.[^/.]+$/, "");
-      // Sample first 3 frames
-      urls = ["0","1","2"].map(sec => `${base}.jpg?start_offset=${sec}`);
+      // Only sample first frame for speed (instead of 3 frames)
+      urls = [`${base}.jpg?start_offset=0`];
     }
 
     let allColors = [];
 
     for (let url of urls) {
       try {
-        // Download image/video frame as buffer
-        const response = await axios.get(url, { responseType: "arraybuffer" });
+        // Download image/video frame as buffer with timeout
+        const response = await axios.get(url, {
+          responseType: "arraybuffer",
+          timeout: 5000 // 5 second timeout
+        });
         const buffer = Buffer.from(response.data, "binary");
 
-        const palette = await Vibrant.from(buffer).quality(2).maxColorCount(12).getPalette();
+        // ✅ Optimized for speed: quality 5 (was 2), maxColorCount 8 (was 12)
+        // Lower quality = faster processing, still good results
+        const palette = await Vibrant.from(buffer)
+          .quality(5)           // Faster sampling (higher = faster but less accurate)
+          .maxColorCount(8)     // Fewer colors = faster processing
+          .getPalette();
+
         const swatches = Object.values(palette).filter(Boolean);
 
         allColors.push(...swatches.map(s => ({ rgb: s._rgb, population: s._population })));
       } catch (err) {
-        console.warn("Vibrant failed for URL:", url, err.message);
+        console.warn("⚠️ Vibrant failed for URL:", url, err.message);
       }
     }
 
-    if(allColors.length === 0) throw new Error("Unable to extract colors from this feed.");
+    // ✅ If no colors extracted, return default theme instead of throwing
+    if (allColors.length === 0) {
+      console.warn("⚠️ No colors extracted, using default theme for:", fileUrl);
+      return DEFAULT_THEME;
+    }
 
     // --- Remove duplicate colors ---
     allColors = allColors.filter(
@@ -78,8 +100,9 @@ async function extractThemeColor(fileUrl, type = "image") {
     return { primary, secondary, accent, text, gradient };
 
   } catch (err) {
-    console.error("Theme extraction failed:", err.message);
-    throw err;
+    // ✅ Return default theme instead of throwing error
+    console.error("⚠️ Theme extraction failed, using default theme:", err.message);
+    return DEFAULT_THEME;
   }
 }
 

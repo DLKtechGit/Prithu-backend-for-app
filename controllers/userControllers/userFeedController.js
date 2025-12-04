@@ -2,19 +2,19 @@
 const Feed = require("../../models/feedModel");
 const ImageView = require("../../models/userModels/MediaSchema/userImageViewsModel");
 const ImageStats = require("../../models/userModels/MediaSchema/imageViewModel");
-const VideoView =require("../../models/userModels/MediaSchema/userVideoViewModel");
-const VideoStats =require("../../models/userModels/MediaSchema/videoViewStatusModel");
+const VideoView = require("../../models/userModels/MediaSchema/userVideoViewModel");
+const VideoStats = require("../../models/userModels/MediaSchema/videoViewStatusModel");
 const mongoose = require("mongoose");
 const User = require("../../models/userModels/userModel");
 const Follower = require("../../models/userFollowingModel");
 const UserFeedActions = require("../../models/userFeedInterSectionModel");
 const UserCategory = require("../../models/userModels/userCategotyModel");
-const {buildDateFilter} =require("../../middlewares/helper/buildDateFilter");
-const Hidden =require("../../models/userModels/hiddenPostSchema");
-const ProfileSettings=require('../../models/profileSettingModel');
-const UserComment=require ('../../models/userCommentModel');
-const CreatorFollower=require("../../models/creatorFollowerModel");
-const {feedTimeCalculator}=require("../../middlewares/feedTimeCalculator")
+const { buildDateFilter } = require("../../middlewares/helper/buildDateFilter");
+const Hidden = require("../../models/userModels/hiddenPostSchema");
+const ProfileSettings = require('../../models/profileSettingModel');
+const UserComment = require('../../models/userCommentModel');
+const CreatorFollower = require("../../models/creatorFollowerModel");
+const { feedTimeCalculator } = require("../../middlewares/feedTimeCalculator")
 
 
 
@@ -63,7 +63,7 @@ exports.userVideoViewCount = async (req, res) => {
     const { feedId } = req.body;
     const userId = req.Id || req.body.userId;
 
-    if (!userId || !feedId ) {
+    if (!userId || !feedId) {
       return res.status(400).json({ message: "userId, feedId, and watchedSeconds are required" });
     }
 
@@ -76,7 +76,7 @@ exports.userVideoViewCount = async (req, res) => {
       return res.status(400).json({ message: "Feed is not a video" });
     }
 
-    
+
 
     // 3️⃣ Check if already recorded for this user + video
     const existing = await VideoView.findOne({
@@ -232,22 +232,22 @@ exports.fetchUserInterested = async (req, res) => {
 
     // Find user categories
     const userCats = await UserCategory.findOne({ userId, ...match })
-  .populate({
-    path: "interestedCategories.categoryId",
-    model: "Categories",
-    select: "name", 
-  });
-// Map to get category name + user's updatedAt
-const categories = userCats?.interestedCategories.map((c) => ({
-  _id: c.categoryId._id,
-  name: c.categoryId.name,
-  updatedAt: c.updatedAt, // user's updated date
-})) || [];
+      .populate({
+        path: "interestedCategories.categoryId",
+        model: "Categories",
+        select: "name",
+      });
+    // Map to get category name + user's updatedAt
+    const categories = userCats?.interestedCategories.map((c) => ({
+      _id: c.categoryId._id,
+      name: c.categoryId.name,
+      updatedAt: c.updatedAt, // user's updated date
+    })) || [];
 
-res.status(200).json({
-  success: true,
-  categories,
-});
+    res.status(200).json({
+      success: true,
+      categories,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({
@@ -278,7 +278,7 @@ exports.fetchUserNonInterested = async (req, res) => {
       model: "Categories",
       select: "name", // only category name
     });
-  console.log(userCats)
+    console.log(userCats)
     // Map to include category name + user's updatedAt
     const categories = userCats?.nonInterestedCategories.map((c) => ({
       _id: c.categoryId._id,
@@ -349,7 +349,7 @@ exports.fetchUserLiked = async (req, res) => {
     // Fetch user liked feeds
     const actions = await UserFeedActions.findOne({ userId })
       .populate("likedFeeds.feedId", "type category language contentUrl");
-     
+
     if (!actions) {
       return res.status(200).json({ success: true, likedFeeds: [] });
     }
@@ -373,7 +373,7 @@ exports.fetchUserLiked = async (req, res) => {
       });
     }
 
-console.log(likedFeeds)
+    console.log(likedFeeds)
 
     res.status(200).json({
       success: true,
@@ -422,10 +422,10 @@ exports.fetchUserCommented = async (req, res) => {
       createdAt: comment.createdAt,
       feed: comment.feedId
         ? {
-            _id: comment.feedId._id,
-            contentUrl: comment.feedId.contentUrl,
-            title: comment.feedId.title || null,
-          }
+          _id: comment.feedId._id,
+          contentUrl: comment.feedId.contentUrl,
+          title: comment.feedId.title || null,
+        }
         : null,
     }));
 
@@ -599,21 +599,21 @@ exports.getUserdetailWithinTheFeed = async (req, res) => {
     else return res.status(400).json({ message: "Invalid roleRef" });
 
     // Find the profile
-    const profile = await ProfileSettings.findOne(query).select("userName profileAvatar bio");
+    const profile = await ProfileSettings.findOne(query).select("userName profileAvatar bio coverPhoto");
     if (!profile) return res.status(404).json({ message: "Profile not found" });
 
-    // Get following info from Follower collection
-    const followerDoc = await Follower.findOne({ userId: profileUserId });
-    const followingCount = followerDoc ? followerDoc.followingIds.length : 0;
+    // Get follower count (users following this profile)
+    const followersCount = await CreatorFollower.countDocuments({ creatorId: profileUserId });
 
-    // Get creator follower count
-    const creatorFollowerDoc = await CreatorFollower.findOne({ creatorId: profileUserId });
-    const creatorFollowerCount = creatorFollowerDoc ? creatorFollowerDoc.followerIds.length : 0;
+    // Get following count (users this profile is following)
+    const followingCount = await CreatorFollower.countDocuments({ followerId: profileUserId });
 
     // Check if current user is following this profile
-    const isFollowing = followerDoc 
-      ? followerDoc.followingIds.some(f => f.userId.toString() === currentUserId) 
-      : false;
+    const followRelation = await CreatorFollower.findOne({
+      creatorId: profileUserId,
+      followerId: currentUserId
+    });
+    const isFollowing = !!followRelation;
 
     return res.json({
       success: true,
@@ -621,8 +621,9 @@ exports.getUserdetailWithinTheFeed = async (req, res) => {
         userName: profile.userName,
         profileAvatar: profile.profileAvatar,
         bio: profile.bio,
+        coverPhoto: profile.coverPhoto,
         followingCount,
-        creatorFollowerCount,
+        creatorFollowerCount: followersCount,
         isFollowing,
       }
     });
@@ -712,4 +713,3 @@ exports.getUserPost = async (req, res) => {
 
 
 
- 

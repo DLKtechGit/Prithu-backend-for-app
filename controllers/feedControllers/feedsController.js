@@ -15,24 +15,29 @@ const ImageStats = require("../../models/userModels/MediaSchema/imageViewModel.j
 const VideoStats = require("../../models/userModels/MediaSchema/videoViewStatusModel");
 
 exports.getAllFeedsByUserId = async (req, res) => {
+  const startTime = Date.now();
   try {
     const rawUserId = req.Id || req.body.userId;
-    console.log(rawUserId);
-    if (!rawUserId)
-      return res.status(404).json({ message: "User ID Required" });
+    console.log(`📡 [getAllFeedsByUserId] Request from userId: ${rawUserId}`);
+
+    if (!rawUserId) {
+      console.warn("⚠️ [getAllFeedsByUserId] Missing userId");
+      return res.status(400).json({ message: "User ID Required" });
+    }
 
     const userId = new mongoose.Types.ObjectId(rawUserId);
 
-    // 📄 Pagination parameters
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    // 📄 Pagination parameters with validation
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10)); // Max 50 per page
     const skip = (page - 1) * limit;
 
-    console.log(`📄 Fetching page ${page}, limit ${limit}, skip ${skip}`);
+    console.log(`📄 [getAllFeedsByUserId] Fetching page ${page}, limit ${limit}, skip ${skip}`);
 
     // 0️⃣ Get hidden posts for this user
     const user = await User.findById(userId).select("hiddenPostIds").lean();
     const hiddenPostIds = user?.hiddenPostIds || [];
+    console.log(`🔒 [getAllFeedsByUserId] Hidden posts count: ${hiddenPostIds.length}`);
 
     // 1️⃣ Aggregate feeds
     const feeds = await Feed.aggregate([
@@ -280,35 +285,66 @@ exports.getAllFeedsByUserId = async (req, res) => {
       },
     ]);
 
-    // ✅ Enrich with additional info (theme color + avatar)
-    const enrichedFeeds = await Promise.all(
-      feeds.map(async (feed) => {
-        const profileSetting = await ProfileSettings.findOne({ userId });
-        const avatarToUse = profileSetting?.modifyAvatar;
-        //  const framedAvatar = await applyFrame(avatarToUse);
+    console.log(`✅ [getAllFeedsByUserId] Fetched ${feeds.length} feeds from database`);
 
-        let themeColor = {
-          primary: "#ffffff",
-          secondary: "#cccccc",
-          accent: "#999999",
-          text: "#000000",
-          gradient: "linear-gradient(135deg, #ffffff, #cccccc, #999999)",
-        };
+    // ✅ Get user's profile settings ONCE (not N times)
+    const profileSetting = await ProfileSettings.findOne({ userId }).lean();
+    const avatarToUse = profileSetting?.modifyAvatar;
 
-        try {
-          themeColor = await extractThemeColor(feed.contentUrl, feed.type);
-        } catch (err) {
-          console.warn(`Theme extraction failed for feed ${feed.feedId}:`, err.message);
+    // ✅ HYBRID APPROACH: Speed + Real Themes
+    // Use cached themes if available, otherwise use default and extract in background
+    const DEFAULT_THEME = {
+      primary: "#4A90E2",
+      secondary: "#7B68EE",
+      accent: "#50C878",
+      text: "#FFFFFF",
+      gradient: "linear-gradient(135deg, #4A90E2, #7B68EE, #50C878)",
+    };
+
+    // Initialize theme cache if not exists (in-memory cache)
+    if (!global.themeCache) {
+      global.themeCache = new Map();
+    }
+
+    // Map feeds with cached or default theme (instant!)
+    const enrichedFeeds = feeds.map((feed) => {
+      const cacheKey = feed.contentUrl;
+      const cachedTheme = global.themeCache.get(cacheKey);
+
+      return {
+        ...feed,
+        avatarToUse,
+        themeColor: cachedTheme || DEFAULT_THEME, // Use cached or default
+        timeAgo: feedTimeCalculator(feed.createdAt),
+      };
+    });
+
+    // 🔥 Extract themes in background (non-blocking)
+    // This runs AFTER response is sent, so it doesn't slow down the API
+    setImmediate(async () => {
+      for (const feed of feeds) {
+        const cacheKey = feed.contentUrl;
+
+        // Skip if already cached
+        if (global.themeCache.has(cacheKey)) {
+          continue;
         }
 
-        return {
-          ...feed,
-          avatarToUse,
-          themeColor,
-          timeAgo: feedTimeCalculator(feed.createdAt),
-        };
-      })
-    );
+        try {
+          // Extract theme (this is slow but happens in background)
+          const extractedTheme = await extractThemeColor(feed.contentUrl, feed.type);
+
+          // Cache the extracted theme for future requests
+          global.themeCache.set(cacheKey, extractedTheme);
+
+          console.log(`🎨 Theme extracted and cached for: ${feed.feedId}`);
+        } catch (err) {
+          console.warn(`⚠️ Background theme extraction failed for ${feed.feedId}:`, err.message);
+          // Cache the default theme so we don't keep trying
+          global.themeCache.set(cacheKey, DEFAULT_THEME);
+        }
+      }
+    });
 
     // 📊 Get total count for pagination metadata
     const totalFeeds = await Feed.countDocuments({
@@ -327,6 +363,12 @@ exports.getAllFeedsByUserId = async (req, res) => {
     const totalPages = Math.ceil(totalFeeds / limit);
     const hasMore = page < totalPages;
 
+    const duration = Date.now() - startTime;
+    console.log(`✅ [getAllFeedsByUserId] Request completed in ${duration}ms`);
+
+    // Add cache headers for better performance
+    res.set('Cache-Control', 'public, max-age=30'); // Cache for 30 seconds
+
     res.status(200).json({
       message: "Feeds retrieved successfully",
       feeds: enrichedFeeds,
@@ -339,8 +381,14 @@ exports.getAllFeedsByUserId = async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("Error in getAllFeedsByUserId:", err);
-    res.status(500).json({ message: "Server error", error: err.message });
+    const duration = Date.now() - startTime;
+    console.error(`❌ [getAllFeedsByUserId] Error after ${duration}ms:`, err);
+    console.error("Stack trace:", err.stack);
+
+    res.status(500).json({
+      message: "Server error while fetching feeds",
+      error: process.env.NODE_ENV === 'development' ? err.message : "Internal server error"
+    });
   }
 };
 
@@ -509,22 +557,22 @@ exports.getFeedsByAccountId = async (req, res) => {
 exports.getUserHidePost = async (req, res) => {
   try {
     const userId = req.Id || req.body.userId;
- 
+
     if (!userId) {
       return res.status(400).json({ message: "userId is required" });
     }
- 
+
     // 1️⃣ Fetch only the hiddenPostIds (super lightweight)
     const user = await User.findById(userId)
       .select("hiddenPostIds")
       .lean();
- 
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
- 
+
     const hiddenIds = user.hiddenPostIds || [];
- 
+
     // 2️⃣ If empty → return early (faster)
     if (hiddenIds.length === 0) {
       return res.status(200).json({
@@ -533,7 +581,7 @@ exports.getUserHidePost = async (req, res) => {
         data: [],
       });
     }
- 
+
     // 3️⃣ Fetch hidden posts (optimized with projection + lean)
     const hiddenPosts = await Feed.find(
       { _id: { $in: hiddenIds } },
@@ -548,13 +596,13 @@ exports.getUserHidePost = async (req, res) => {
     )
       .populate("createdByAccount", "_id userName profileImage")
       .lean();
- 
+
     return res.status(200).json({
       message: "Hidden posts fetched successfully",
       count: hiddenPosts.length,
       data: hiddenPosts,
     });
- 
+
   } catch (err) {
     console.error("Error fetching hidden posts:", err);
     return res.status(500).json({
@@ -563,7 +611,7 @@ exports.getUserHidePost = async (req, res) => {
     });
   }
 };
- 
+
 
 
 
@@ -746,48 +794,49 @@ exports.getTrendingFeeds = async (req, res) => {
     // 🔥 1️⃣ Today's date range
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
- 
+
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
- 
+
     // 🔥 2️⃣ Fetch ONLY today's feeds
     const feeds = await Feed.find({
       createdAt: { $gte: todayStart, $lte: todayEnd }
     })
       .populate("createdByAccount", "_id")
       .lean();
- 
+
     if (!feeds.length) {
       return res.status(404).json({ message: "No feeds available for today" });
     }
- 
+
     // ⚡ 3️⃣ Compute engagement metrics per feed
     const feedScores = await Promise.all(
       feeds.map(async (feed) => {
         const feedId = feed._id;
         const userId = feed.createdByAccount?._id;
         const roleRef = feed.roleRef;
- 
+
         // Profile Query
         let queryField;
         if (roleRef === "Admin") queryField = { adminId: userId };
         else if (roleRef === "Child_Admin") queryField = { childAdminId: userId };
         else queryField = { userId: userId };
- 
+
         const profile = await ProfileSettings.findOne(queryField, {
           userName: 1,
           profileAvatar: 1,
+          userId: 1,
         }).lean();
- 
+
         let totalLikes = 0;
         let totalShares = 0;
         let totalViews = 0;
         let totalDownloads = 0;
         let score = 0;
- 
+
         const feedAgeHours =
           (Date.now() - new Date(feed.createdAt)) / (1000 * 60 * 60);
- 
+
         // Admin / Child Admin Privilege (unchanged)
         if (roleRef === "Admin" || roleRef === "Child_Admin") {
           if (feedAgeHours <= 48) {
@@ -823,10 +872,10 @@ exports.getTrendingFeeds = async (req, res) => {
                 },
               },
             ]);
- 
+
             totalLikes = userActions[0]?.totalLikes || 0;
             totalShares = userActions[0]?.totalShares || 0;
- 
+
             if (feed.type === "image") {
               const imgStats = await ImageStats.findOne({ imageId: feedId });
               totalViews = imgStats?.totalViews || 0;
@@ -836,9 +885,9 @@ exports.getTrendingFeeds = async (req, res) => {
               totalViews = vidStats?.totalViews || 0;
               totalDownloads = vidStats?.totalDownloads || 0;
             }
- 
+
             const decayFactor = feedAgeHours <= 24 ? 1 : Math.exp(-feedAgeHours / 48);
- 
+
             score =
               (totalLikes * 3 +
                 totalShares * 5 +
@@ -878,10 +927,10 @@ exports.getTrendingFeeds = async (req, res) => {
               },
             },
           ]);
- 
+
           totalLikes = userActions[0]?.totalLikes || 0;
           totalShares = userActions[0]?.totalShares || 0;
- 
+
           if (feed.type === "image") {
             const imgStats = await ImageStats.findOne({ imageId: feedId });
             totalViews = imgStats?.totalViews || 0;
@@ -891,9 +940,9 @@ exports.getTrendingFeeds = async (req, res) => {
             totalViews = vidStats?.totalViews || 0;
             totalDownloads = vidStats?.totalDownloads || 0;
           }
- 
+
           const decayFactor = feedAgeHours <= 24 ? 1 : Math.exp(-feedAgeHours / 48);
- 
+
           score =
             (totalLikes * 3 +
               totalShares * 5 +
@@ -901,7 +950,7 @@ exports.getTrendingFeeds = async (req, res) => {
               totalDownloads * 4) *
             decayFactor;
         }
- 
+
         return {
           ...feed,
           totalLikes,
@@ -912,6 +961,7 @@ exports.getTrendingFeeds = async (req, res) => {
           roleRef,
           createdByProfile: {
             userName: profile?.userName || "Unknown User",
+            userId: profile?.userId || "Unknown User",
             profileAvatar:
               profile?.profileAvatar ||
               "https://default-avatar.example.com/default.png",
@@ -919,13 +969,13 @@ exports.getTrendingFeeds = async (req, res) => {
         };
       })
     );
- 
+
     // Sort feeds by score
     const sortedFeeds = feedScores.sort((a, b) => b.score - a.score);
     const maxScore = sortedFeeds.length
       ? Math.max(...sortedFeeds.map((f) => f.score))
       : 0;
- 
+
     const normalizedFeeds = sortedFeeds.map((f, index) => ({
       ...f,
       trendingScore: maxScore
@@ -933,12 +983,12 @@ exports.getTrendingFeeds = async (req, res) => {
         : 0,
       rank: index + 1,
     }));
- 
+
     const cleanedFeeds = normalizedFeeds.map((f) => {
       const { score, ...rest } = f;
       return rest;
     });
- 
+
     return res.status(200).json({
       message: "Today's Trending Feeds",
       count: cleanedFeeds.length,
@@ -952,7 +1002,7 @@ exports.getTrendingFeeds = async (req, res) => {
     });
   }
 };
- 
+
 
 
 
